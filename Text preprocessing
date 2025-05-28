@@ -1,0 +1,96 @@
+import spacy
+import re
+import pandas as pd
+
+# Load spaCy's English language model
+nlp = spacy.load('en_core_web_sm')
+
+# Define a dictionary for common chatwords
+chatwords_dict = {
+    "u": "you",
+    "r": "are",
+    "ur": "your",
+    "gr8": "great",
+    "b4": "before",
+    "idk": "i do not know",
+    "omg": "oh my god",
+    "lol": "laughing out loud",
+    "ttyl": "talk to you later",
+    "brb": "be right back",
+    "btw": "by the way",
+    "thx": "thanks",
+    "pls": "please",
+    "plz": "please",
+    "wanna": "want to",
+    "gonna": "going to",
+    "gotta": "got to",
+    "imo": "in my opinion",
+    "imho": "in my humble opinion",
+    "smh": "shaking my head",
+    "np": "no problem",
+    "bcoz": "because",
+    "bc": "because",
+    "cuz": "because",
+    "lmao": "laughing my ass off",
+    "omw": "on my way"
+    "tq": "thank you",
+    "ty": "thank you",
+    "tysm": "thank you so much",
+    "imo": "in my opinion",
+    "imho": "in my humble opinion",
+    "pov": "point of view",
+    "btw": "by the way",
+}
+
+# Function to replace chatwords
+def replace_chatwords(text):
+    words = text.split()
+    replaced_words = [chatwords_dict.get(word, word) for word in words]
+    return ' '.join(replaced_words)
+
+def preprocess_text(text):
+    if not isinstance(text, str):
+        return ""
+
+    text = text.lower()
+
+    # Remove URLs
+    text = re.sub(r'http\S+|www\S+|https\S+', '', text, flags=re.MULTILINE)
+
+    # Remove HTML tags
+    text = re.sub(r'<.*?>', '', text)
+
+    # Replace chatwords
+    text = replace_chatwords(text)
+
+    # Remove special characters and numbers
+    text = re.sub(r'[^a-zA-Z\s]', '', text)
+
+    # Process text with spaCy
+    doc = nlp(text)
+
+    # Lemmatization and remove stopwords/punctuation
+    tokens = [token.lemma_ for token in doc if not token.is_stop and not token.is_punct]
+
+    # Join tokens
+    text = ' '.join(tokens)
+
+    # Remove extra whitespace
+    text = re.sub(r'\s+', ' ', text).strip()
+
+    return text
+
+# Load CSV
+try:
+    df = pd.read_csv('dataset_for_nlp.csv', encoding='utf-8')
+except UnicodeDecodeError:
+    df = pd.read_csv('dataset_for_nlp.csv', encoding='latin1')
+
+# Check column and apply
+if 'Sentences' in df.columns:
+    df['cleaned_text'] = df['Sentences'].apply(preprocess_text)
+else:
+    print("Column 'Sentences' not found. Available columns:", df.columns.tolist())
+
+# Save cleaned data
+df.to_csv('preprocessed_data.csv', index=False)
