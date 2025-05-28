@@ -1,0 +1,424 @@
+import pandas as pd
+import re
+import nltk
+import numpy as np
+from gensim.models import Word2Vec
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
+from sklearn.svm import LinearSVC
+from sklearn.metrics import classification_report, accuracy_score
+from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+from sklearn.naive_bayes import MultinomialNB, GaussianNB
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.preprocessing import LabelEncoder
+from sklearn.utils.class_weight import compute_class_weight
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Embedding, LSTM, Dense, SpatialDropout1D
+from tensorflow.keras.utils import to_categorical
+from IPython.display import display
+import matplotlib.pyplot as plt
+
+
+
+nltk.download('stopwords')
+nltk.download('wordnet')
+
+# Initialize the global list to store model accuracies
+model_accuracies = []
+
+#loading data
+def load_dataset(filepath="/content/b_label_data.csv"):
+    df = pd.read_csv(filepath, encoding="utf-8")
+    print(f"Loaded {len(df)} records from {filepath}")
+    return df
+
+def preprocess_dataframe(df):
+    lemmatizer = WordNetLemmatizer()
+    stop_words = set(stopwords.words('english'))
+    df = df.dropna(subset=["Sentences"])
+    df["cleaned_text"] = df["Sentences"].apply(lambda x: " ".join(
+        [lemmatizer.lemmatize(word) for word in clean_text(str(x)).split() if word not in stop_words]
+    ))
+    return df
+
+#displaying_report
+def display_report(title, y_test, y_pred):
+    acc = accuracy_score(y_test, y_pred)
+    report = classification_report(y_test, y_pred, output_dict=True, zero_division=0)
+    df_report = pd.DataFrame(report).transpose().round(2)
+
+    # Save accuracy to global list
+    global model_accuracies # Access the global list
+    model_accuracies.append((title, acc))
+
+    # Highlight table
+    def highlight_rows(row):
+        if row.name in ['accuracy', 'macro avg', 'weighted avg']:
+            return ['color: #b7711d'] * len(row)
+        else:
+            return [''] * len(row)
+
+    print(f"\n📋 {title}")
+    print(f"Accuracy: {acc:.2f}")
+    display(df_report.style.apply(highlight_rows, axis=1).format("{:.2f}"))
+
+# Plot model accuracy comparison
+def plot_model_accuracies():
+    # Ensure the global model_accuracies list is used
+    global model_accuracies
+    if not model_accuracies:
+        print("No model accuracies recorded to plot.")
+        return
+
+    titles, accuracies = zip(*model_accuracies)
+    plt.figure(figsize=(12, 6))
+    bars = plt.barh(titles, accuracies, color='skyblue')
+    plt.xlabel("Accuracy")
+    plt.title("Model Accuracy Comparison")
+    plt.xlim(0, 1.0)
+    for bar, acc in zip(bars, accuracies):
+        plt.text(acc + 0.01, bar.get_y() + 0.25, f"{acc:.2f}", fontsize=9)
+    plt.gca().invert_yaxis()
+    plt.tight_layout()
+    plt.show()
+
+#bag of words + navives bayes implement
+def train_bow_model(df):
+    X = df["cleaned_text"]
+    y = df["Sentiment"]
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    vectorizer = CountVectorizer(max_features=5000)
+    X_train_vec = vectorizer.fit_transform(X_train)
+    X_test_vec = vectorizer.transform(X_test)
+    clf = MultinomialNB()
+    clf.fit(X_train_vec, y_train)
+    y_pred = clf.predict(X_test_vec)
+    display_report("Bag of Words + Naive Bayes", y_test, y_pred)
+
+#tf-idf + navives bayes implement
+def train_tfidf_model(df):
+    X = df["cleaned_text"]
+    y = df["Sentiment"]
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    vectorizer = TfidfVectorizer(max_features=5000)
+    X_train_vec = vectorizer.fit_transform(X_train)
+    X_test_vec = vectorizer.transform(X_test)
+    clf = MultinomialNB()
+    clf.fit(X_train_vec, y_train)
+    y_pred = clf.predict(X_test_vec)
+    display_report("TF-IDF + Naive Bayes", y_test, y_pred)
+
+#word2vec + navives bayes implement
+def train_word2vec_model(df):
+    sentences = [text.split() for text in df["cleaned_text"]]
+    model_w2v = Word2Vec(sentences, vector_size=100, window=5, min_count=1, workers=4)
+
+    def get_vector(sentence):
+        words = sentence.split()
+        vectors = [model_w2v.wv[word] for word in words if word in model_w2v.wv]
+        return np.mean(vectors, axis=0) if vectors else np.zeros(100)
+
+    X = np.vstack(df["cleaned_text"].apply(get_vector))
+    y = df["Sentiment"]
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    clf = GaussianNB()
+    clf.fit(X_train, y_train)
+    y_pred = clf.predict(X_test)
+    display_report("Word2Vec + Naive Bayes", y_test, y_pred)
+
+#tf-idf + svm implement
+def train_svm_model(df):
+    X = df["cleaned_text"]
+    y = df["Sentiment"]
+    vectorizer = TfidfVectorizer(max_features=5000)
+    X_vec = vectorizer.fit_transform(X)
+    X_train, X_test, y_train, y_test = train_test_split(X_vec, y, test_size=0.2, random_state=42)
+    clf = LinearSVC(class_weight='balanced')
+    clf.fit(X_train, y_train)
+    y_pred = clf.predict(X_test)
+    display_report("TF-IDF + SVM", y_test, y_pred)
+
+#bow + svm
+def train_bow_svm_model(df):
+    X = df["cleaned_text"]
+    y = df["Sentiment"]
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    vectorizer = CountVectorizer(max_features=5000)
+    X_train_vec = vectorizer.fit_transform(X_train)
+    X_test_vec = vectorizer.transform(X_test)
+    clf = LinearSVC()
+    clf.fit(X_train_vec, y_train)
+    y_pred = clf.predict(X_test_vec)
+    display_report("Bag of Words + SVM", y_test, y_pred)
+
+#Word2Vec + SVM
+def train_word2vec_svm_model(df):
+    sentences = [text.split() for text in df["cleaned_text"]]
+    model_w2v = Word2Vec(sentences, vector_size=100, window=5, min_count=1, workers=4)
+
+    def get_vector(sentence):
+        words = sentence.split()
+        vectors = [model_w2v.wv[word] for word in words if word in model_w2v.wv]
+        return np.mean(vectors, axis=0) if vectors else np.zeros(100)
+
+    X = np.vstack(df["cleaned_text"].apply(get_vector))
+    y = df["Sentiment"]
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    clf = LinearSVC()
+    clf.fit(X_train, y_train)
+    y_pred = clf.predict(X_test)
+    display_report("Word2Vec + SVM", y_test, y_pred)
+
+#TF-IDF + KNN
+def train_tfidf_knn_model(df):
+    X = df["cleaned_text"]
+    y = df["Sentiment"]
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    vectorizer = TfidfVectorizer(max_features=5000)
+    X_train_vec = vectorizer.fit_transform(X_train)
+    X_test_vec = vectorizer.transform(X_test)
+
+    clf = KNeighborsClassifier(n_neighbors=5)
+    clf.fit(X_train_vec, y_train)
+    y_pred = clf.predict(X_test_vec)
+
+    display_report("TF-IDF + KNN", y_test, y_pred)
+
+#BoW + KNN
+def train_bow_knn_model(df):
+    X = df["cleaned_text"]
+    y = df["Sentiment"]
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    vectorizer = CountVectorizer(max_features=5000)
+    X_train_vec = vectorizer.fit_transform(X_train)
+    X_test_vec = vectorizer.transform(X_test)
+
+    clf = KNeighborsClassifier(n_neighbors=5)
+    clf.fit(X_train_vec, y_train)
+    y_pred = clf.predict(X_test_vec)
+
+    display_report("BoW + KNN", y_test, y_pred)
+
+#word2vec+KNN
+def train_word2vec_knn_model(df):
+    sentences = [text.split() for text in df["cleaned_text"]]
+    model_w2v = Word2Vec(sentences, vector_size=100, window=5, min_count=1, workers=4)
+
+    def get_vector(sentence):
+        words = sentence.split()
+        vectors = [model_w2v.wv[word] for word in words if word in model_w2v.wv]
+        return np.mean(vectors, axis=0) if vectors else np.zeros(100)
+
+    X = np.vstack(df["cleaned_text"].apply(get_vector))
+    y = df["Sentiment"]
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    clf = KNeighborsClassifier(n_neighbors=5)
+    clf.fit(X_train, y_train)
+    y_pred = clf.predict(X_test)
+
+    display_report("Word2Vec + KNN", y_test, y_pred)
+
+#TF-IDF + Decision Tree
+def train_tfidf_dt_model(df):
+    X = df["cleaned_text"]
+    y = df["Sentiment"]
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    vectorizer = TfidfVectorizer(max_features=5000)
+    X_train_vec = vectorizer.fit_transform(X_train)
+    X_test_vec = vectorizer.transform(X_test)
+
+    clf = DecisionTreeClassifier(random_state=42)
+    clf.fit(X_train_vec, y_train)
+    y_pred = clf.predict(X_test_vec)
+
+    display_report("TF-IDF + Decision Tree", y_test, y_pred)
+
+#BoW + Decision Tree
+def train_bow_dt_model(df):
+    X = df["cleaned_text"]
+    y = df["Sentiment"]
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    vectorizer = CountVectorizer(max_features=5000)
+    X_train_vec = vectorizer.fit_transform(X_train)
+    X_test_vec = vectorizer.transform(X_test)
+
+    clf = DecisionTreeClassifier(random_state=42)
+    clf.fit(X_train_vec, y_train)
+    y_pred = clf.predict(X_test_vec)
+
+    display_report("BoW + Decision Tree", y_test, y_pred)
+#Word2Vec + Decision Tree
+def train_word2vec_dt_model(df):
+    sentences = [text.split() for text in df["cleaned_text"]]
+    model_w2v = Word2Vec(sentences, vector_size=100, window=5, min_count=1, workers=4)
+
+    def get_vector(sentence):
+        words = sentence.split()
+        vectors = [model_w2v.wv[word] for word in words if word in model_w2v.wv]
+        return np.mean(vectors, axis=0) if vectors else np.zeros(100)
+
+    X = np.vstack(df["cleaned_text"].apply(get_vector))
+    y = df["Sentiment"]
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    clf = DecisionTreeClassifier(random_state=42)
+    clf.fit(X_train, y_train)
+    y_pred = clf.predict(X_test)
+
+    display_report("Word2Vec + Decision Tree", y_test, y_pred)
+
+#now applying ml------------------------------------
+
+#TF_IDF + LSTM
+def train_tfidf_lstm_model(df):
+    tokenizer = Tokenizer(num_words=5000)
+    tokenizer.fit_on_texts(df["cleaned_text"])
+    sequences = tokenizer.texts_to_sequences(df["cleaned_text"])
+    padded = pad_sequences(sequences, maxlen=200)
+
+    label_encoder = LabelEncoder()
+    labels = label_encoder.fit_transform(df["Sentiment"])
+    y_cat = to_categorical(labels)
+
+    X_train, X_test, y_train, y_test = train_test_split(padded, y_cat, test_size=0.2, random_state=42)
+
+    class_weights = compute_class_weight(class_weight='balanced',
+    classes=np.unique(np.argmax(y_train, axis=1)),
+    y=np.argmax(y_train, axis=1))
+    class_weight_dict = dict(enumerate(class_weights))
+
+    model = Sequential()
+    model.add(Embedding(input_dim=5000, output_dim=64))
+    model.add(SpatialDropout1D(0.2))
+    model.add(LSTM(64, dropout=0.2, recurrent_dropout=0.2))
+    model.add(Dense(y_cat.shape[1], activation='softmax'))
+
+    model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+    model.fit(X_train, y_train, epochs=5, batch_size=64, validation_split=0.1, class_weight=class_weight_dict, verbose=0)
+
+    y_pred = np.argmax(model.predict(X_test), axis=1)
+    y_true = np.argmax(y_test, axis=1)
+
+    print("Prediction counts:", dict(zip(*np.unique(y_pred, return_counts=True))))
+    display_report("TF-IDF + LSTM", label_encoder.inverse_transform(y_true), label_encoder.inverse_transform(y_pred))
+
+
+
+#BOW + LSTM
+def train_bow_lstm_model(df):
+    vectorizer = CountVectorizer(max_features=5000)
+    tokenizer = Tokenizer(num_words=5000)
+    tokenizer.fit_on_texts(df["cleaned_text"])
+    sequences = tokenizer.texts_to_sequences(df["cleaned_text"])
+    padded = pad_sequences(sequences, maxlen=200)
+
+    label_encoder = LabelEncoder()
+    labels = label_encoder.fit_transform(df["Sentiment"])
+    y_cat = to_categorical(labels)
+
+    X_train, X_test, y_train, y_test = train_test_split(padded, y_cat, test_size=0.2, random_state=42) # 'padded' is now defined
+
+    class_weights = compute_class_weight(class_weight='balanced',
+    classes=np.unique(np.argmax(y_train, axis=1)),
+    y=np.argmax(y_train, axis=1))
+    class_weight_dict = dict(enumerate(class_weights))
+
+    model = Sequential()
+
+
+    model.add(Embedding(input_dim=5000, output_dim=64, input_length=200))
+    model.add(SpatialDropout1D(0.2))
+    model.add(LSTM(64, dropout=0.2, recurrent_dropout=0.2))
+    model.add(Dense(y_cat.shape[1], activation='softmax'))
+
+    model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+    model.fit(X_train, y_train, epochs=5, batch_size=64, validation_split=0.1, class_weight=class_weight_dict, verbose=0)
+
+    y_pred = np.argmax(model.predict(X_test), axis=1)
+    y_true = np.argmax(y_test, axis=1)
+
+    print("Prediction counts:", dict(zip(*np.unique(y_pred, return_counts=True))))
+    display_report("BoW + LSTM", label_encoder.inverse_transform(y_true), label_encoder.inverse_transform(y_pred))
+
+#WORD2VEC + LSTM
+def train_word2vec_lstm_model(df):
+    sentences = [text.split() for text in df["cleaned_text"]]
+    model_w2v = Word2Vec(sentences, vector_size=100, window=5, min_count=1)
+
+    tokenizer = Tokenizer()
+    tokenizer.fit_on_texts(df["cleaned_text"])
+    sequences = tokenizer.texts_to_sequences(df["cleaned_text"])
+    word_index = tokenizer.word_index
+    padded = pad_sequences(sequences, maxlen=200)
+
+    vocab_size = len(word_index) + 1
+    embedding_matrix = np.zeros((vocab_size, 100))
+    for word, i in word_index.items():
+      if word in model_w2v.wv:
+        embedding_matrix[i] = model_w2v.wv[word]
+
+    label_encoder = LabelEncoder()
+    labels = label_encoder.fit_transform(df["Sentiment"])
+    y_cat = to_categorical(labels)
+
+    X_train, X_test, y_train, y_test = train_test_split(padded, y_cat, test_size=0.2, random_state=42)
+
+    class_weights = compute_class_weight(class_weight='balanced',
+    classes=np.unique(np.argmax(y_train, axis=1)),
+    y=np.argmax(y_train, axis=1))
+    class_weight_dict = dict(enumerate(class_weights))
+
+    model = Sequential()
+    model.add(Embedding(input_dim=vocab_size, output_dim=100, weights=[embedding_matrix], input_length=200, trainable=False))
+    model.add(SpatialDropout1D(0.2))
+    model.add(LSTM(64, dropout=0.2, recurrent_dropout=0.2))
+    model.add(Dense(y_cat.shape[1], activation='softmax'))
+
+    model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+    model.fit(X_train, y_train, epochs=5, batch_size=64, validation_split=0.1, class_weight=class_weight_dict, verbose=0)
+
+    y_pred = np.argmax(model.predict(X_test), axis=1)
+    y_true = np.argmax(y_test, axis=1)
+
+    print("Prediction counts:", dict(zip(*np.unique(y_pred, return_counts=True))))
+    display_report("Word2Vec + LSTM", label_encoder.inverse_transform(y_true), label_encoder.inverse_transform(y_pred))
+
+#main function to run models
+if __name__ == "__main__":
+    df = load_dataset("/content/b_label_data.csv")
+    df = preprocess_dataframe(df)
+
+    train_bow_model(df)
+    train_tfidf_model(df)
+    train_word2vec_model(df)
+    train_svm_model(df)
+    train_bow_svm_model(df)
+    train_word2vec_svm_model(df)
+    train_tfidf_knn_model(df)
+    train_bow_knn_model(df)
+    train_word2vec_knn_model(df)
+    train_tfidf_dt_model(df)
+    train_bow_dt_model(df)
+    train_word2vec_dt_model(df)
+    train_tfidf_lstm_model(df)
+    train_bow_lstm_model(df)
+    train_word2vec_lstm_model(df)
+    df = load_dataset()
+    df = preprocess_dataframe(df)
+    plot_label_distribution(df)
+    plot_model_accuracies()
